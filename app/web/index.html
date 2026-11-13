@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>取水井耗水区间服务</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+  }
+  header { padding: 20px 28px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 22px 28px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 15px; color: var(--accent); }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input[type=text], input[type=file], select {
+    width: 100%; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: #0b1220; color: var(--text);
+  }
+  button {
+    margin-top: 12px; padding: 9px 16px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #082f49; font-weight: 600; cursor: pointer;
+  }
+  button.secondary { background: var(--line); color: var(--text); }
+  button:hover { filter: brightness(1.1); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  pre {
+    background: #0b1220; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; max-height: 320px; font-size: 12px;
+  }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+    background: var(--line); font-size: 11px; margin-left: 6px; }
+  .conflict { border: 1px solid var(--err); border-radius: 8px; padding: 10px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>取水井水表读数 → 耗水区间 <span class="pill" id="pid-pill">进程: -</span></h1>
+  <p>上传 CSV（meter_id,ts_utc,cumulative；每批 ≤ 1000 行；UTC；非负整数累计量）。
+     同表同刻可补录/更正；累计量倒退将整批拒绝并列出相邻冲突读数。</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>① 上传批次</h2>
+    <label>CSV 文件</label>
+    <input type="file" id="csv-file" accept=".csv,text/csv" />
+    <label>演示：提交拿锁前暂停（填 meter_id，留关则不暂停；需先在右侧 Arm）</label>
+    <input type="text" id="pause-key" placeholder="例如 MW-001" />
+    <div>
+      <button onclick="upload(false)">上传</button>
+      <button class="secondary" onclick="loadSample()">填入示例内容参考</button>
+    </div>
+    <p class="hint">也可直接 <code>curl -F 'file=@x.csv' http://localhost:8000/api/readings/batch</code></p>
+  </section>
+
+  <section class="card">
+    <h2>② 演示暂停开关（交错补录）</h2>
+    <div class="row">
+      <div>
+        <label>meter_id</label>
+        <input type="text" id="block-key" placeholder="MW-001" />
+      </div>
+    </div>
+    <button onclick="armBlocker()">Arm（下一次该表上传会暂停）</button>
+    <button class="secondary" onclick="releaseBlocker()">Release（放行暂停的上传）</button>
+    <button class="secondary" onclick="blockerStatus()">刷新状态</button>
+    <pre id="blocker-out">（尚未查询）</pre>
+  </section>
+
+  <section class="card full">
+    <h2>③ 查询读数与区间（同一事务快照，不会混用修改前后状态）</h2>
+    <div class="row">
+      <div>
+        <label>水表编号</label>
+        <input type="text" id="query-meter" placeholder="MW-001" />
+      </div>
+      <div style="flex:0 0 140px">
+        <label>最近 N 条读数（可选）</label>
+        <input type="text" id="query-limit" placeholder="留空=全部" />
+      </div>
+      <div style="flex:0 0 auto">
+        <button onclick="queryMeter()">查询</button>
+        <button class="secondary" onclick="listMeters()">所有水表</button>
+      </div>
+    </div>
+    <div id="query-tables"></div>
+  </section>
+
+  <section class="card full">
+    <h2>④ 最近一次上传响应</h2>
+    <pre id="upload-out">（尚未上传）</pre>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function refreshPid() {
+  try {
+    const r = await fetch('/healthz'); const j = await r.json();
+    $('pid-pill').textContent = '进程: ' + (j.host || j.pid) + ' (pid ' + j.pid + ')';
+  } catch (e) { /* ignore */ }
+}
+setInterval(refreshPid, 4000); refreshPid();
+
+function show(el, text, cls) {
+  el.className = cls || '';
+  el.textContent = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+}
+
+async function upload() {
+  const f = $('csv-file').files[0];
+  if (!f) { alert('请先选择 CSV 文件'); return; }
+  const fd = new FormData(); fd.append('file', f);
+  const headers = {};
+  const key = $('pause-key').value.trim();
+  if (key) headers['X-Pause-Before-Commit'] = key;
+  const out = $('upload-out');
+  show(out, '上传中' + (key ? '（已请求在 ' + key + ' 提交前暂停…）' : '') + ' …', 'warn');
+  try {
+    const r = await fetch('/api/readings/batch', { method: 'POST', headers, body: fd });
+    const j = await r.json();
+    if (r.ok) {
+      show(out, j, 'ok'); renderConflicts(null);
+    } else if (r.status === 409) {
+      show(out, j, 'err'); renderConflicts(j.conflicts || []);
+    } else {
+      show(out, j, 'warn');
+    }
+  } catch (e) {
+    show(out, '请求失败: ' + e, 'err');
+  }
+}
+
+function renderConflicts(conflicts) {
+  const host = $('query-tables');
+  if (!conflicts) return;
+  if (!conflicts.length) { host.innerHTML = ''; return; }
+  host.innerHTML = '<div class="conflict"><strong class="err">整批拒绝的相邻倒退读数：</strong>' +
+    conflicts.map(c =>
+      `<div style="margin-top:6px">水表 <b>${c.meter_id}</b>：` +
+      `${c.earlier.ts_utc} 累计 ${c.earlier.cumulative} → ` +
+      `${c.later.ts_utc} 累计 ${c.later.cumulative}（后者更小）</div>`
+    ).join('') + '</div>';
+}
+
+async function queryMeter() {
+  const meter = $('query-meter').value.trim();
+  if (!meter) { alert('请输入水表编号'); return; }
+  const limit = $('query-limit').value.trim();
+  const url = '/api/meters/' + encodeURIComponent(meter) + (limit ? '?limit=' + encodeURIComponent(limit) : '');
+  const r = await fetch(url);
+  const j = await r.json();
+  if (!r.ok) { $('query-tables').innerHTML = '<pre class="err">' + JSON.stringify(j, null, 2) + '</pre>'; return; }
+  $('query-tables').innerHTML =
+    `<p class="hint">读数 ${j.reading_count} 条，区间 ${j.interval_count} 条（首条读数无区间）</p>` +
+    table('原始读数', ['ts_utc', 'cumulative'], j.readings.map(x => [x.ts_utc, x.cumulative])) +
+    table('耗水区间', ['start', 'end', 'start_cum', 'end_cum', 'delta'],
+      j.intervals.map(x => [x.start_ts_utc, x.end_ts_utc, x.start_cumulative, x.end_cumulative, x.delta]));
+}
+
+async function listMeters() {
+  const r = await fetch('/api/meters'); const j = await r.json();
+  $('query-tables').innerHTML = table(
+    '水表', ['meter_id', '读数', '区间', '首读数UTC', '末读数UTC'],
+    j.meters.map(m => [m.meter_id, m.reading_count, m.interval_count, m.first_ts_utc, m.last_ts_utc]));
+}
+
+function table(title, heads, rows) {
+  return `<h2 style="margin-top:14px">${title}</h2>` +
+    `<table><thead><tr>${heads.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>` +
+    (rows.length ? rows.map(r => `<tr>${r.map(c => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')
+                 : '<tr><td colspan="' + heads.length + '" class="hint">无数据</td></tr>') +
+    '</tbody></table>';
+}
+
+async function armBlocker() {
+  const key = $('block-key').value.trim();
+  if (!key) return alert('请输入 meter_id');
+  const r = await fetch('/api/admin/blocker/arm?key=' + encodeURIComponent(key), { method: 'POST' });
+  show($('blocker-out'), await r.json(), r.ok ? 'ok' : 'err');
+}
+async function releaseBlocker() {
+  const key = $('block-key').value.trim();
+  const url = '/api/admin/blocker/release' + (key ? '?key=' + encodeURIComponent(key) : '');
+  const r = await fetch(url, { method: 'POST' });
+  show($('blocker-out'), await r.json(), r.ok ? 'ok' : 'err');
+}
+async function blockerStatus() {
+  const r = await fetch('/api/admin/blocker');
+  show($('blocker-out'), await r.json());
+}
+
+function loadSample() {
+  show($('upload-out'),
+    'meter_id,ts_utc,cumulative\nMW-001,2026-01-01T00:00:00Z,100\nMW-001,2026-01-01T01:00:00Z,112\n',
+    '');
+}
+refreshPid();
+</script>
+</body>
+</html>

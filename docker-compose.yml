@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: water
+      POSTGRES_PASSWORD: water
+      POSTGRES_DB: water
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U water -d water"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 两个完全对等的 web 进程，共用同一个 PostgreSQL 库。
+  web1:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://water:water@db:5432/water
+      BLOCKER_ENABLED: "1"
+      BLOCKER_TIMEOUT_SECONDS: "300"
+    ports:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web2:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://water:water@db:5432/water
+      BLOCKER_ENABLED: "1"
+      BLOCKER_TIMEOUT_SECONDS: "300"
+    ports:
+      - "8002:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
